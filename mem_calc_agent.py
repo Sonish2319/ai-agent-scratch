@@ -1,6 +1,7 @@
 import ollama
 from datetime import datetime
 
+# 1. TOOL FUNCTIONS
 
 def calculator(a, b, operation):
     """Perform a mathematical operation on two numbers."""
@@ -26,9 +27,17 @@ def calculator(a, b, operation):
 
 def get_current_time():
     """Return the current time as a string."""
+
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+# 2. TOOL REGISTRY
 
+tool_registry = {
+    "calculator": calculator,
+    "get_current_time": get_current_time
+}
+
+# 3. TOOL DEFINITIONS FOR QWEN
 
 tools = [
     {
@@ -77,15 +86,15 @@ tools = [
     }
 ]
 
+# 4. START AGENT
 
 print("Simple AI Agent")
 print("Type 'exit' to quit.\n")
 
 # Conversation memory
-
 messages = []
 
-# Chat loop
+# 5. CHAT LOOP
 
 while True:
 
@@ -95,14 +104,14 @@ while True:
         print("Goodbye!")
         break
 
-    # Add user message to memory
+    # Add user message to conversation
     messages.append({
         "role": "user",
         "content": user_message
     })
 
-    # Agent loop
-
+    # 6. AGENT LOOP
+    
     while True:
 
         print("\nThinking...")
@@ -112,14 +121,16 @@ while True:
             messages=messages,
             tools=tools
         )
-
-        # Does Qwen want to use a tool?
+        
+        # 7. DID QWEN REQUEST A TOOL?
         
         if response.message.tool_calls:
 
-            # Store Qwen's tool request
+            # Store Qwen's tool request in conversation
             messages.append(response.message)
 
+
+            # A model response can contain multiple tool calls
             for tool_call in response.message.tool_calls:
 
                 tool_name = tool_call.function.name
@@ -128,38 +139,41 @@ while True:
                 print(f"Agent wants to use: {tool_name}")
                 print(f"Arguments: {arguments}")
 
-                # Execute calculator
-                if tool_name == "calculator":
+                # 8. LOOK UP TOOL IN REGISTRY                
 
-                    result = calculator(
-                        arguments["a"],
-                        arguments["b"],
-                        arguments["operation"]
-                    )
+                tool = tool_registry.get(tool_name)
 
-                    print(f"Tool result: {result}")
 
-                    # Give tool result back to Qwen
-                    messages.append({
-                        "role": "tool",
-                        "content": str(result)
-                    })
+                if tool is None:
 
-                elif tool_name == "get_current_time":
+                    print(f"Error: Tool '{tool_name}' not found.")
 
-                    result = get_current_time()
-                    print(f"Current time: {result}")
+                    result = f"Error: Tool '{tool_name}' not found."
 
-                    messages.append({
-                        "role": "tool",
-                        "content": result
-                    })
 
-            # Continue the agent loop
+                else:
+
+                    try:
+
+                        result = tool(**arguments) # this automatically unpacks the arguments dictionary into keyword arguments for the tool function
+                        # this above is also called generic tool execution because it does not care about argument or not ?
+                    except Exception as e:
+                        result = f"Tool error: {str(e)}"
+
+                print(f"Tool result: {result}")
+                
+                # 10. GIVE TOOL RESULT BACK TO QWEN
+
+                messages.append({
+                    "role": "tool",
+                    "content": str(result)
+                })
+
+            # Ask Qwen what to do next
             continue
-
-        # No tool needed
-
+        
+        # 11. NO TOOL NEEDED
+        
         messages.append({
             "role": "assistant",
             "content": response.message.content
@@ -167,7 +181,8 @@ while True:
 
         print(f"\nQwen: {response.message.content}")
 
-        # Agent is finished
+        # Agent has finished
         break
+
 
     print()
