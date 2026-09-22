@@ -1,4 +1,5 @@
 import ollama
+from datetime import datetime
 
 
 def calculator(a, b, operation):
@@ -21,6 +22,12 @@ def calculator(a, b, operation):
 
     else:
         return "Error: unknown operation"
+
+
+def get_current_time():
+    """Return the current time as a string."""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
 
 
 tools = [
@@ -54,6 +61,19 @@ tools = [
                 "required": ["a", "b", "operation"]
             }
         }
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_time",
+            "description": "Get the current local date and time.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
     }
 ]
 
@@ -61,17 +81,11 @@ tools = [
 print("Simple AI Agent")
 print("Type 'exit' to quit.\n")
 
-
-# --------------------------------
 # Conversation memory
-# --------------------------------
 
 messages = []
 
-
-# --------------------------------
 # Chat loop
-# --------------------------------
 
 while True:
 
@@ -87,9 +101,7 @@ while True:
         "content": user_message
     })
 
-    # --------------------------------
     # Agent loop
-    # --------------------------------
 
     while True:
 
@@ -101,10 +113,8 @@ while True:
             tools=tools
         )
 
-        # --------------------------------
         # Does Qwen want to use a tool?
-        # --------------------------------
-
+        
         if response.message.tool_calls:
 
             # Store Qwen's tool request
@@ -135,12 +145,20 @@ while True:
                         "content": str(result)
                     })
 
+                elif tool_name == "get_current_time":
+
+                    result = get_current_time()
+                    print(f"Current time: {result}")
+
+                    messages.append({
+                        "role": "tool",
+                        "content": result
+                    })
+
             # Continue the agent loop
             continue
 
-        # --------------------------------
         # No tool needed
-        # --------------------------------
 
         messages.append({
             "role": "assistant",
