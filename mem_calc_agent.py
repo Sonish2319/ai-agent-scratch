@@ -1,4 +1,5 @@
 import ollama
+import json
 from datetime import datetime
 
 
@@ -29,7 +30,7 @@ def calculator(a, b, operation):
 
 
 def get_current_time():
-    """Return the current time as a string."""
+    """Return the current local date and time."""
 
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -50,6 +51,7 @@ tool_registry = {
 
 agent_state = {
     "current_task": None,
+    "plan": None,
     "last_tool": None,
     "last_result": None,
     "completed": False
@@ -110,30 +112,102 @@ tools = [
 
 
 # ============================================================
-# 5. START AGENT
+# 5. PLANNER
+# ============================================================
+
+def create_plan(task):
+    """Ask Qwen to create a plan without executing any tools."""
+
+    response = ollama.chat(
+        model="qwen3:4b",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are an AI agent planner. "
+                    "Break the user's task into clear executable steps. "
+                    "Return ONLY valid JSON. "
+
+                    "The JSON must contain a 'steps' array. "
+
+                    "Each step must contain 'tool' and 'arguments'. "
+
+                    "Available tools are: "
+
+                    "1. calculator "
+                    "Arguments: a, b, operation. "
+                    "operation must be one of: "
+                    "add, subtract, multiply, divide. "
+
+                    "2. get_current_time "
+                    "Arguments: none. "
+
+                    "If a step depends on the result of a previous step, "
+                    "use '$previous_result' as the argument value. "
+
+                    "Do not execute any tools. "
+                    "Only create the plan."
+                )
+            },
+            {
+                "role": "user",
+                "content": task
+            }
+        ]
+    )
+
+    plan_text = response.message.content
+
+    try:
+        plan = json.loads(plan_text)
+        return plan
+
+    except json.JSONDecodeError:
+        print("\nPlanner returned invalid JSON:")
+        print(plan_text)
+
+        return {
+            "steps": []
+        }
+
+
+# ============================================================
+# 6. START AGENT
 # ============================================================
 
 print("Simple AI Agent")
 print("Type 'exit' to quit.\n")
 
 
-# Conversation memory
+# ============================================================
+# 7. CONVERSATION MEMORY
+# ============================================================
+
 messages = [
     {
         "role": "system",
         "content": (
             "You are a helpful AI agent. "
+
             "Use the calculator tool for mathematical calculations. "
-            "Use the get_current_time tool when the user asks for the current time. "
+
+            "Use the get_current_time tool when the user asks "
+            "for the current time. "
+
             "Do not invent tool results. "
-            "Use tools when they are appropriate."
+
+            "Use tools when they are appropriate. "
+
+            "Follow the planner's suggested plan when possible, "
+            "but use your own tool-calling reasoning to determine "
+            "the correct execution."
         )
     }
 ]
 
 
 # ============================================================
-# 6. CHAT LOOP
+# 8. CHAT LOOP
 # ============================================================
 
 while True:
@@ -150,13 +224,36 @@ while True:
     # --------------------------------------------------------
 
     agent_state["current_task"] = user_message
+    agent_state["plan"] = None
     agent_state["last_tool"] = None
     agent_state["last_result"] = None
     agent_state["completed"] = False
 
 
+    # ========================================================
+    # 9. CREATE PLAN
+    # ========================================================
+
+    print("\nCreating plan...")
+
+    plan = create_plan(user_message)
+
+    agent_state["plan"] = plan
+
+
+    print("\nPlan:")
+
+    for index, step in enumerate(plan.get("steps", []), start=1):
+
+        print(
+            f"{index}. "
+            f"{step.get('tool')} "
+            f"{step.get('arguments')}"
+        )
+
+
     # --------------------------------------------------------
-    # Add user message to conversation
+    # Give the plan to the main agent
     # --------------------------------------------------------
 
     messages.append({
@@ -164,9 +261,19 @@ while True:
         "content": user_message
     })
 
+    messages.append({
+        "role": "system",
+        "content": (
+            "Planner generated the following plan for the current task:\n"
+            + json.dumps(plan)
+            + "\n"
+            "Use this plan as guidance when deciding which tools to call."
+        )
+    })
+
 
     # ========================================================
-    # 7. AGENT LOOP
+    # 10. MAIN AGENT LOOP
     # ========================================================
 
     while True:
@@ -182,7 +289,7 @@ while True:
 
 
         # ====================================================
-        # 8. DID QWEN REQUEST A TOOL?
+        # 11. DID QWEN REQUEST A TOOL?
         # ====================================================
 
         if response.message.tool_calls:
@@ -210,7 +317,7 @@ while True:
 
 
                 # =================================================
-                # 9. LOOK UP TOOL IN REGISTRY
+                # 12. LOOK UP TOOL IN REGISTRY
                 # =================================================
 
                 tool = tool_registry.get(tool_name)
@@ -244,7 +351,7 @@ while True:
 
 
                 # =================================================
-                # 10. GIVE TOOL RESULT BACK TO QWEN
+                # 13. GIVE TOOL RESULT BACK TO QWEN
                 # =================================================
 
                 messages.append({
@@ -253,12 +360,15 @@ while True:
                 })
 
 
+            # ------------------------------------------------
             # Ask Qwen what to do next
+            # ------------------------------------------------
+
             continue
 
 
         # ====================================================
-        # 11. NO TOOL NEEDED
+        # 14. NO TOOL NEEDED
         # ====================================================
 
         messages.append({

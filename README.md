@@ -91,3 +91,80 @@ Agent state flow::
         ├── tool calls
         ├── tool results
         └── assistant responses
+
+
+
+
+Planning by qwen and executing by python
+
+
+             USER
+               │
+               ▼
+          create_plan()
+               │
+               ▼
+       ┌─────────────────┐
+       │ Structured Plan │
+       └────────┬────────┘
+                │
+                ▼
+        execute_plan()
+                │
+                ▼
+         tool_registry
+                │
+                ▼
+           calculator()
+                │
+                ▼
+              40
+
+
+
+              till now architecture::
+
+                        USER
+                           │
+                           ▼
+                    ┌─────────────┐
+                    │   PLANNER   │
+                    │    Qwen     │
+                    └──────┬──────┘
+                           │
+                           ▼
+                    Structured JSON
+                           │
+                           ▼
+                  ┌─────────────────┐
+                  │   PLAN STATE    │
+                  │                 │
+                  │ Step 1          │
+                  │ Step 2          │
+                  │ Step 3          │
+                  └────────┬────────┘
+                           │
+                           ▼
+                    EXECUTE PLAN
+                           │
+             ┌─────────────┴─────────────┐
+             ▼                           ▼
+          Tool 1                      Tool 2
+             │                           │
+             ▼                           ▼
+          Result 1 ────────────────→ Result 2
+             │
+             ▼
+       previous_result
+             │
+             ▼
+          Next Step
+             │
+             ▼
+        Execution Complete
+             │
+             ▼
+           Qwen
+             │
+             ▼
+        Final Answer
