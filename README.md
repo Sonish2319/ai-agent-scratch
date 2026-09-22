@@ -1,13 +1,16 @@
-Agent Architecture
+# AI Agent Architecture
 
-This project uses Qwen as the planner/reasoning layer and Python as the execution layer.
+This project uses **Qwen** (via Ollama) as the planner/reasoning layer and **Python** as the execution layer.
 
-The architecture has evolved from simple tool calling into a stateful, structured planning and execution system.
+What started as simple tool calling has evolved, step by step, into a stateful, structured planning-and-execution system. This README traces that journey — from the first naive version to the current `agent.py` implementation.
 
-1. Basic Tool Calling
+---
 
-The initial architecture allows Qwen to select a tool, while the tool registry finds and executes the corresponding Python function.
+## Stage 1: Basic Tool Calling
 
+The starting point: Qwen picks a tool, a registry finds the matching Python function, and the function runs.
+
+```
                     USER
                       │
                       ▼
@@ -43,25 +46,19 @@ The initial architecture allows Qwen to select a tool, while the tool registry f
                       │
                       ▼
                 Final answer
+```
 
+Flow: `USER → QWEN → Tool Selection → Tool Registry → Tool Executor → Tool Result → QWEN → Final Answer`
 
-The basic flow is:
+**Lesson learned:** an LLM can call functions, but every call is isolated — there's no memory of what happened before.
 
-USER
-  -> QWEN
-  -> Tool Selection
-  -> Tool Registry
-  -> Tool Executor
-  -> Tool Result
-  -> QWEN
-  -> Final Answer
+---
 
-2. Agent State
+## Stage 2: Agent State
 
-The next step is introducing persistent agent state.
+Next came the idea of **persistent agent state** — instead of treating each tool call independently, the agent tracks the current task, step, results, and status.
 
-Instead of treating every tool call independently, the agent keeps track of the current task, previous results, execution step, and completion status.
-
+```
                  ┌─────────────────┐
                  │   Agent State   │
                  │                 │
@@ -87,10 +84,9 @@ Instead of treating every tool call independently, the agent keeps track of the 
                           │
                           ▼
                         QWEN
+```
 
-
-Conceptually:
-
+```python
 agent_state = {
     task = "...",
     step = 1,
@@ -98,14 +94,17 @@ agent_state = {
     results = {},
     status = "running"
 }
+```
 
+**Lesson learned:** giving the agent a "memory of itself" lets it reason about what it already did, not just what tool to call next.
 
-The agent can now use the previous execution context when deciding what to do next.
+---
 
-3. Agent State Flow
+## Stage 3: Agent State Flow
 
-The agent loop combines conversation memory with agent execution state.
+Then the agent loop combined **conversation memory** (what was said) with **agent execution state** (what was done).
 
+```
                          USER
                           │
                           ▼
@@ -127,30 +126,17 @@ The agent loop combines conversation memory with agent execution state.
              ├── tool calls
              ├── tool results
              └── assistant responses
+```
 
+**Lesson learned:** two distinct kinds of context are needed — the *conversation* (for natural dialogue) and the *execution state* (for reliable multi-step behavior). Conflating them makes the agent brittle.
 
-This gives the agent two important forms of context:
+---
 
-conversation_memory = {
-    user_messages = {},
-    tool_calls = {},
-    tool_results = {},
-    assistant_responses = {}
-}
+## Stage 4: Planning by Qwen, Execution by Python
 
-agent_state = {
-    current_task = "...",
-    last_tool = nil,
-    last_result = nil,
-    completed = false
-}
+A clean separation of concerns: **Qwen plans, Python executes.**
 
-4. Planning by Qwen, Execution by Python
-
-The architecture then separates planning from execution.
-
-Qwen creates a structured plan, while Python executes that plan.
-
+```
                          USER
                            │
                            ▼
@@ -172,39 +158,33 @@ Qwen creates a structured plan, while Python executes that plan.
                            │
                            ▼
                            40
+```
 
-
-The separation is:
-
+```
 -- Qwen
 plan = create_plan(user_request)
 
 -- Python
 result = execute_plan(plan)
+```
 
+**Lesson learned:** letting the LLM *decide* and letting deterministic code *act* is safer and more debuggable than letting the LLM call tools directly, turn by turn.
 
-Qwen decides what should happen.
+---
 
-Python decides how the actual tools are executed.
+## Stage 5: Current Architecture
 
-5. Current Architecture
+The current design combines everything learned so far:
 
-The current architecture combines:
+- Qwen-based planning
+- Structured JSON plans
+- Persistent plan state
+- A tool registry
+- Sequential execution
+- Passing results from one step to the next
+- Final response generation
 
-Qwen-based planning
-
-Structured JSON plans
-
-Persistent plan state
-
-Tool registry
-
-Sequential execution
-
-Previous-step results
-
-Final response generation
-
+```
                          USER
                            │
                            ▼
@@ -249,13 +229,15 @@ Final response generation
               │
               ▼
          Final Answer
+```
 
-6. Structured Plan
+---
 
-The planner produces a machine-readable plan rather than directly executing tools.
+## Stage 6: Structured Plan
 
-For example:
+The planner outputs a **machine-readable plan**, not direct tool calls:
 
+```python
 plan = {
     steps = {
         {
@@ -267,14 +249,14 @@ plan = {
         }
     }
 }
+```
 
+The executor resolves each step's tool through the registry:
 
-The execution layer receives this plan and resolves the requested tool through the registry.
-
+```python
 function execute_plan(plan)
     for _, step in ipairs(plan.steps) do
         local tool = tool_registry[step.tool]
-
         local result = tool(step.input)
 
         agent_state.last_tool = step.tool
@@ -284,11 +266,15 @@ function execute_plan(plan)
 
     agent_state.completed = true
 end
+```
 
-7. Previous Result → Next Step
+---
 
-A key part of the architecture is that one step can provide information to the next step.
+## Stage 7: Previous Result → Next Step
 
+Steps can now feed results into one another instead of running in isolation:
+
+```
         Step 1
           │
           ▼
@@ -308,29 +294,27 @@ A key part of the architecture is that one step can provide information to the n
           │
           ▼
        Result 2
+```
 
-
-For example:
-
+```
 Step 1:
     calculator("20 + 20")
-    
 Result:
     40
 
 Step 2:
     calculator(previous_result * 2)
-
 Result:
     80
+```
 
+**Lesson learned:** this is what turns a bag of tools into an actual multi-step *workflow*.
 
-This allows the agent to build multi-step workflows instead of treating each tool call as an isolated operation.
+---
 
-8. Overall Architecture
+## Stage 8: Overall Architecture
 
-The complete system can be summarized as:
-
+```
                          ┌──────────────┐
                          │     USER     │
                          └──────┬───────┘
@@ -388,18 +372,19 @@ The complete system can be summarized as:
                                │
                                ▼
                          Final Answer
+```
 
-Architecture Principle
+### Architecture Principle
 
-The main design principle is:
-
+```
 QWEN   = Planning + Reasoning
 PYTHON = Execution + Tool Management
 STATE  = Memory + Execution Context
-
+```
 
 Or more simply:
 
+```
              QWEN
               │
               │ "What should I do?"
@@ -424,6 +409,51 @@ Or more simply:
               │
               ▼
         Final Answer
+```
 
+---
 
-This architecture keeps reasoning, planning, state management, and execution separated while allowing them to work together as an agent loop.
+## Where I Am Now: `agent.py`
+
+The current implementation (`agent.py`) is a working, runnable version of Stage 5–8 above, built on **Ollama + `qwen3:4b`**. It maps directly onto the diagrams:
+
+| Concept above | Implemented as |
+|---|---|
+| Tool functions | `calculator(a, b, operation)`, `get_current_time()` |
+| Tool registry | `tool_registry = { "calculator": ..., "get_current_time": ... }` |
+| Agent state | `agent_state` dict — `current_task`, `plan`, `current_step`, `last_tool`, `last_result`, `completed` |
+| Tool definitions (for the LLM) | JSON-schema `tools` list passed to `ollama.chat` |
+| Planner (Qwen) | `create_plan(task)` — sends the task + a system prompt to `qwen3:4b`, asking for **JSON-only** output with a `steps` array |
+| Structured plan | Each step has `tool` and `arguments`; a dependent step can reference `"$previous_result"` |
+| Plan executor (Python) | `execute_plan(plan)` — loops through steps, resolves `$previous_result`, looks up the tool in the registry, calls it, and records results |
+| Previous result → next step | The `$previous_result` placeholder is swapped for the prior step's actual return value before each call |
+| Error handling | Division by zero and unknown tools return an `"Error: ..."` string; `execute_plan` stops early and reports `success: False` if any step errors |
+| Conversation memory | `messages[]` — a running list of user/assistant turns, seeded with a system prompt telling Qwen not to invent tool results |
+| Final answer generation | After execution, the task, plan, and execution results are serialized to JSON and handed back to `qwen3:4b`, which is told to answer using *only* those results |
+| Transparency | Each run prints the plan, step-by-step execution, and the full `agent_state` at the end, so the whole loop is inspectable |
+
+### What's new in this version specifically
+
+- **Real LLM plumbing**: swapped the conceptual pseudocode for an actual `ollama.chat()` integration against `qwen3:4b`.
+- **JSON-schema tool defs**: tools are now described the way most LLM tool-calling APIs expect (`type: function`, `parameters`, `enum` for `operation`), even though the planner doesn't call them directly — it just uses the schema as a reference when writing the plan.
+- **Graceful JSON failure handling**: if Qwen returns malformed JSON for a plan, `create_plan` catches it and falls back to an empty plan instead of crashing.
+- **Fail-fast execution**: the executor stops at the first error instead of silently continuing, and reports exactly which step failed.
+- **A real REPL loop**: `while True` chat loop with `exit` to quit, state reset per task, and printed agent state after every turn — this is the first version that's actually usable interactively.
+
+---
+
+## Key Takeaways So Far
+
+1. **Separate reasoning from execution.** Letting the LLM plan and letting deterministic Python act is far more reliable than free-form tool calling turn by turn.
+2. **State is not the same as memory.** Conversation history (what was said) and execution state (what was done, and what's next) serve different purposes and should be tracked separately.
+3. **Structured plans are debuggable.** A JSON plan can be printed, logged, validated, and retried — a stream of ad-hoc tool calls can't.
+4. **Chaining results (`$previous_result`) is what makes it an *agent* and not just a router.**
+5. **Fail fast, and tell the LLM the truth.** Feeding only verified execution results back to Qwen (not letting it "recalculate" or invent numbers) keeps the final answer grounded.
+
+## Next Steps
+
+- Support parallel (non-sequential) steps in a plan
+- Add more tools and a way for the planner to discover them dynamically
+- Persist `agent_state` and `messages` across sessions (currently in-memory only)
+- Add retries/repair for malformed plans instead of falling back to an empty plan
+- Move from single-shot planning to re-planning when a step fails
