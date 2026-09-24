@@ -410,4 +410,182 @@ Or more simply:
               ▼
         Final Answer
 ```
+## Stage 9: Structured Execution Result
+
+`execute_plan()` no longer just runs steps. It now **reports what happened**, so the system can detect failure and reason about it.
+
+```python
+execution = {
+    "success": False,
+    "failed_step": 2,
+    "failed_tool": "calculator",
+    "results": [30, "Error: cannot divide by zero"],
+    "error": "Error: cannot divide by zero"
+}
+```
+
+Failures are detected in three places:
+
+```
+Step runs
+   │
+   ├── Tool not in registry        → "Error: Tool 'x' not found."
+   ├── Tool raises an exception    → "Tool error: ..."
+   └── Tool returns "Error..." str → tool-level error (e.g. divide by zero)
+   │
+   ▼
+Stop execution immediately
+   │
+   ▼
+Return structured failure report
+```
+
+**Lesson learned:** a plan that can't report *why* it failed can't be fixed. Structured results turn failure into usable information.
+
 ---
+
+## Stage 10: Replanning (Recovery Planner)
+
+When execution fails, Python sends the failure back to Qwen through `create_recovery_plan()`. Qwen sees the original task, the plan that failed, and the execution report.
+
+```
+                    Execution Failed
+                           │
+                           ▼
+                  ┌─────────────────┐
+                  │ Recovery Context│
+                  │                 │
+                  │ original_task   │
+                  │ failed_plan     │
+                  │ execution_result│
+                  └────────┬────────┘
+                           │
+                           ▼
+                  ┌─────────────────┐
+                  │  RECOVERY       │
+                  │  PLANNER (Qwen) │
+                  └────────┬────────┘
+                           │
+                           ▼
+                   Corrected JSON Plan
+```
+
+```python
+recovery_context = {
+    "original_task": task,
+    "failed_plan": failed_plan,
+    "execution_result": execution
+}
+
+recovery_plan = create_recovery_plan(task, plan, execution)
+```
+
+Qwen still only *plans*. It never executes anything.
+
+If the recovery planner returns invalid JSON or an empty `steps` list, the agent stops retrying, because there is nothing to execute:
+
+```python
+if not recovery_plan.get("steps"):
+    execution = {"success": False, "error": "Recovery planner returned an empty plan."}
+    break
+```
+
+**Lesson learned:** the same planner/executor split applies to failure. Python detects the failure, and Qwen decides how to fix it.
+
+---
+
+## Stage 11: Executing the Recovery Plan
+
+The corrected plan replaces the failed one and goes through the **same executor**. No special recovery path is needed.
+
+```
+                 Recovery Plan
+                       │
+                       ▼
+              Save as current plan
+              agent_state["plan"]
+                       │
+                       ▼
+                execute_plan()
+                       │
+             ┌─────────┴─────────┐
+             ▼                   ▼
+          Success              Failure
+             │                   │
+             ▼                   ▼
+    completed = True       Try another recovery
+                           (if attempts remain)
+```
+
+Example from a real run:
+
+```
+Task: Add 10 and 20, then divide the result by 0.
+
+Original plan:                        Recovery plan:
+1. calculator add 10, 20              1. calculator add 10, 20
+2. calculator divide $prev, 0  ✗      2. calculator divide $prev, 5  ✓
+
+Result: 30 → Error: cannot divide    Result: 30 → 6.0
+        by zero
+```
+
+**Lesson learned:** reusing one executor for both plans keeps behavior consistent and the code small.
+
+---
+
+## Stage 12: Maximum Retry Limit
+
+Replanning could loop forever if Qwen keeps producing bad plans. A hard cap prevents this:
+
+```python
+MAX_RECOVERY_ATTEMPTS = 3
+```
+
+```
+                    Plan fails
+                        │
+                        ▼
+         recovery_attempts < MAX_RECOVERY_ATTEMPTS ?
+                        │
+             ┌──────────┴──────────┐
+            YES                    NO
+             │                     │
+             ▼                     ▼
+     recovery_attempts += 1     Give up
+     create_recovery_plan()     Report final error
+     execute_plan()             to Qwen
+             │
+             ▼
+      Success? ── YES ──► Done
+             │
+            NO
+             │
+             └──► back to the check
+```
+
+The loop stops in exactly three cases:
+
+| Condition | Result |
+|---|---|
+| Execution succeeds | `completed = True` |
+| Recovery planner returns an empty or invalid plan | Stop early, report error |
+| `recovery_attempts` reaches `MAX_RECOVERY_ATTEMPTS` | Stop, report final error and attempts used |
+
+The counter lives in agent state and is reset for every new task:
+
+```python
+agent_state = {
+    "current_task": None,
+    "plan": None,
+    "current_step": None,
+    "last_tool": None,
+    "last_result": None,
+    "completed": False,
+    "recovery_attempts": 0
+}
+```
+
+After the loop ends, success or failure, Qwen receives the final plan, the execution result, and the number of attempts used. It writes the final answer from those facts only.
+
+**Lesson learned:** every autonomous retry loop needs a ceiling. Without one, a failing agent burns time and tokens indefinitely.
